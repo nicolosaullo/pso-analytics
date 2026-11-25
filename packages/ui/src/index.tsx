@@ -3,7 +3,7 @@ import { Fragment, memo, useCallback, useEffect, useId, useMemo, useRef, useStat
 import type { CardMetadata, CardRow, MetricKey, Rate, SortDirection, SortKey } from './cardTable'
 import type { AnalyticsPopulation } from './population'
 import { LIMITED_SOURCE_LABELS } from './population'
-import { CARD_METRICS, EMPTY_MINIMUMS, cardMetricValue, indexCardMetadata, minimumMetricValue, minimumSample, parseDeckListCards, selectCardTable } from './cardTable'
+import { CARD_METRICS, EMPTY_MINIMUMS, cardMetricValue, cardRate, indexCardMetadata, minimumMetricValue, minimumSample, parseDeckListCards, selectCardTable } from './cardTable'
 import { QueryBuilder } from './QueryBuilder'
 import { SiteOpenings } from './SiteOpenings'
 import { MetaMap } from './MetaMap'
@@ -160,14 +160,17 @@ const COLUMN_DESCRIPTIONS: Record<SortKey, string> = {
   inDeck: 'Win rate in player games where this card was in the deck.',
   played: 'Win rate in player games where this card was played at least once. Games without reliable play history are excluded.',
   openingHand: 'Win rate when this card was in the opening hand after the mulligan.',
+  drawnLater: 'Win rate when this card first reached the hand after the mulligan: in hand minus opening hand. Compare it with opening hand to tell early-game cards from late-game ones.',
   inHand: 'Win rate when this card was seen in the player’s hand after the mulligan, at any point in the game.',
   notInHand: 'Win rate when this card was in the deck but never seen in the player’s hand after the mulligan. Incomplete hand histories are excluded.',
   inDeckUnplayed: 'Win rate when this card was in the deck but not played. Uncertain play histories are excluded.',
   winRateDifference: 'In hand win rate minus not in hand win rate, in percentage points.',
+  playedWhenDrawn: 'Player-games where this card was played, as a share of those where it reached the hand. Low values point to cards that often stay stuck in hand.',
 }
 const MINIMUM_LABELS: Record<MetricKey, string> = {
   deckShare: 'Deck share', inDeck: 'In deck', played: 'Played', openingHand: 'Opening hand', inHand: 'In hand',
   notInHand: 'Not in hand', inDeckUnplayed: 'Not played', winRateDifference: 'In hand vs. not in hand',
+  drawnLater: 'Drawn later', playedWhenDrawn: 'Played when drawn',
 }
 function percent(value: number | null): string {
   return value === null ? '—' : `${(value * 100).toFixed(1)}%`
@@ -178,11 +181,13 @@ function rateCell(rate: Rate) {
 }
 
 // Summary-first columns; the rest stay one click away under All stats.
-const KEY_CARD_METRICS: readonly MetricKey[] = ['deckShare', 'inDeck', 'played', 'winRateDifference']
+const KEY_CARD_METRICS: readonly MetricKey[] = ['deckShare', 'inDeck', 'played', 'openingHand', 'winRateDifference']
 const CELL_TITLES: Partial<Record<MetricKey, string>> = {
   inHand: "Card seen in the player's hand after the mulligan, at any point in the game",
   notInHand: "Card in the deck but never seen in the player's hand after the mulligan; incomplete hand histories are excluded",
   winRateDifference: 'In hand win rate minus not in hand win rate (percentage points)',
+  drawnLater: 'Card first reached the hand after the mulligan',
+  playedWhenDrawn: 'Played player-games divided by in hand player-games; plays from the pile also count',
 }
 
 function plural(count: number, word: string, many = `${word}s`): string {
@@ -246,7 +251,9 @@ function CardStatSheet({ card }: { card: CardRow }) {
       if (key === 'winRateDifference') return <div key={key}><dt>{label}</dt>
         <dd className={`game-analytics__stat-value ${toneClass(differenceTone(cardMetricValue(card, key)))}`}>{differenceLabel(card)}</dd>
         <dd className="game-analytics__sample">Drawn minus never drawn</dd></div>
-      const rate = card[key]
+      if (key === 'playedWhenDrawn') return <div key={key}><dt>{label}</dt><dd className="game-analytics__stat-value">{percent(cardMetricValue(card, key))}</dd>
+        <dd className="game-analytics__sample">{card.inHand.playerGames === null ? 'Not enough games' : `of ${plural(card.inHand.playerGames, 'player-game')} with it in hand`}</dd></div>
+      const rate = cardRate(card, key)
       return <div key={key}><dt>{label}</dt>
         <dd className={`game-analytics__stat-value ${toneClass(winRateTone(rate.winRate))}`}>{percent(rate.winRate)}</dd>
         <dd className="game-analytics__sample">{rate.winRate === null || rate.playerGames === null ? 'Not enough games'
@@ -891,7 +898,9 @@ function GameAnalyticsDashboardInner({ endpoint, title = 'Game analytics', live 
                 ? <td key={key} data-label={MINIMUM_LABELS[key]} className="game-analytics__share-cell">{percent(card.deckShare)}<ShareBar value={card.deckShare} max={maxDeckShare} /></td>
                 : key === 'winRateDifference'
                   ? <td key={key} data-label={MINIMUM_LABELS[key]} title={CELL_TITLES[key]}><span className={`game-analytics__pill ${toneClass(differenceTone(cardMetricValue(card, key)))}`}>{differenceLabel(card)}</span></td>
-                  : <td key={key} data-label={MINIMUM_LABELS[key]} title={CELL_TITLES[key]}>{rateCell(card[key])}</td>)}
+                  : key === 'playedWhenDrawn'
+                    ? <td key={key} data-label={MINIMUM_LABELS[key]} title={CELL_TITLES[key]}>{percent(cardMetricValue(card, key))}</td>
+                    : <td key={key} data-label={MINIMUM_LABELS[key]} title={CELL_TITLES[key]}>{rateCell(cardRate(card, key))}</td>)}
             </tr>{selectedCard === card.cardKey ? <tr className="game-analytics__details-row"><td colSpan={visibleMetrics.length + 1}>
               <div className="game-analytics__card-details" id={`card-details-${card.cardKey.replaceAll(' ', '-')}`}>
                 <CardArtwork key={`${card.cardKey}-${catalogIndex.get(card.cardKey)?.imageUrl ?? ''}`}

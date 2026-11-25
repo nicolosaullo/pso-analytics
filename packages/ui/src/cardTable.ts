@@ -4,7 +4,9 @@ export interface CardRow {
   inDeck: Rate; played: Rate; openingHand: Rate; inHand: Rate; notInHand: Rate; inDeckUnplayed: Rate
 }
 export interface CardMetadata { name: string; type: string; elements: readonly string[]; rarity: string; imageUrl?: string }
-export type MetricKey = 'deckShare' | 'inDeck' | 'played' | 'openingHand' | 'inHand' | 'notInHand' | 'inDeckUnplayed' | 'winRateDifference'
+export type MetricKey = 'deckShare' | 'inDeck' | 'played' | 'openingHand' | 'drawnLater' | 'inHand' | 'notInHand' | 'inDeckUnplayed'
+  | 'winRateDifference' | 'playedWhenDrawn'
+export type RateKey = Exclude<MetricKey, 'deckShare' | 'winRateDifference' | 'playedWhenDrawn'>
 export type SortKey = 'cardName' | MetricKey
 export type SortDirection = 'ascending' | 'descending'
 export interface CardTableFilters {
@@ -21,26 +23,57 @@ export const CARD_METRICS = [
   { key: 'inDeck', label: 'In deck win rate' },
   { key: 'played', label: 'Played win rate' },
   { key: 'openingHand', label: 'Opening hand win rate' },
+  { key: 'drawnLater', label: 'Drawn later win rate' },
   { key: 'inDeckUnplayed', label: 'In deck, not played' },
   { key: 'inHand', label: 'In hand win rate' },
   { key: 'notInHand', label: 'Not in hand win rate' },
   { key: 'winRateDifference', label: 'In hand vs. not in hand' },
+  { key: 'playedWhenDrawn', label: 'Played when drawn' },
 ] as const
 export const EMPTY_MINIMUMS: Record<MetricKey, string> = {
   deckShare: '', inDeck: '', played: '', openingHand: '', inHand: '', notInHand: '', inDeckUnplayed: '', winRateDifference: '',
+  drawnLater: '', playedWhenDrawn: '',
+}
+
+// The API's card-rate minimum, applied to rates derived here.
+const MINIMUM_DERIVED_GAMES = 20
+const NO_RATE: Rate = { playerGames: null, matches: null, wins: null, winRate: null }
+
+export function cardRate(card: CardRow, key: RateKey): Rate {
+  return key === 'drawnLater' ? drawnLaterRate(card) : card[key]
+}
+
+// In hand includes the opening hand, so the difference is games where the card first reached the hand after the mulligan.
+function drawnLaterRate({ inHand, openingHand }: CardRow): Rate {
+  if (inHand.playerGames === null || inHand.wins === null || openingHand.playerGames === null || openingHand.wins === null) return NO_RATE
+  const games = inHand.playerGames - openingHand.playerGames
+  const wins = inHand.wins - openingHand.wins
+  // Incomplete hand histories leave some opening-hand games out of in hand, which can break the subtraction.
+  if (games < MINIMUM_DERIVED_GAMES || wins < 0 || wins > games) return NO_RATE
+  return { playerGames: games, matches: null, wins, winRate: wins / games }
+}
+
+function playedWhenDrawn({ played, inHand }: CardRow): number | null {
+  if (played.playerGames === null || !inHand.playerGames) return null
+  const share = played.playerGames / inHand.playerGames
+  // Played also counts plays from the pile, so a ratio above 1 is not a share of draws.
+  return share <= 1 ? share : null
 }
 
 export function cardMetricValue(card: CardRow, key: MetricKey): number | null {
   if (key === 'deckShare') return card.deckShare
+  if (key === 'playedWhenDrawn') return playedWhenDrawn(card)
   if (key === 'winRateDifference') return card.inHand.winRate === null || card.notInHand.winRate === null
     ? null : card.inHand.winRate - card.notInHand.winRate
-  return card[key].winRate
+  return cardRate(card, key).winRate
 }
 
 function cardMetricCount(card: CardRow, key: MetricKey): number | null {
   if (key === 'winRateDifference') return card.inHand.playerGames === null || card.notInHand.playerGames === null
     ? null : Math.min(card.inHand.playerGames, card.notInHand.playerGames)
-  return card[key === 'deckShare' ? 'inDeck' : key].playerGames
+  if (key === 'deckShare') return card.inDeck.playerGames
+  if (key === 'playedWhenDrawn') return card.inHand.playerGames
+  return cardRate(card, key).playerGames
 }
 
 export function minimumSample(value: string): number {
