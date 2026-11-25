@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import { fixtureServer, LIVE_ROUTES } from './fixtureServer.ts'
 
@@ -8,7 +9,8 @@ const PSO = 'https://playsorceryonline.com'
 // (/api/v1) and adds the key on the way out, so it never reaches the browser. Without one, everything is served from
 // fixtures/.
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, new URL('../..', import.meta.url).pathname, '')
+  // fileURLToPath, not URL.pathname: on Windows pathname is "/C:/…" and the env file is never found.
+  const env = loadEnv(mode, fileURLToPath(new URL('../..', import.meta.url)), '')
   const key = env.PSO_API_KEY?.trim()
   return {
     plugins: [react(), fixtureServer({ live: Boolean(key) })],
